@@ -1,10 +1,12 @@
 package com.self.scheduledclicker
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -27,6 +29,8 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -66,6 +70,7 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ClickerPrefs.init(this)
+        requestNotificationPermissionIfNeeded()
         setContentView(buildMainView())
         populateInputsFromPrefs()
     }
@@ -82,6 +87,8 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
         isLooping = true
         Choreographer.getInstance().postFrameCallback(this)
         refreshStatusAndPointsUi()
+        // 延遲 500ms 再次更新狀態（等待系統重新綁定無障礙服務）
+        mainHandler.postDelayed({ refreshStatusAndPointsUi() }, 500L)
     }
 
     override fun onPause() {
@@ -100,6 +107,17 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
         val full = clockFormat.format(Date(now))
         tvLiveClock.text = full.substring(0, 10) // HH:mm:ss.S
         Choreographer.getInstance().postFrameCallback(this)
+    }
+
+    /**
+     * 同時檢查系統設定資料庫與服務實例，精準判斷無障礙服務狀態
+     */
+    private fun isAccessibilityEnabledInSystem(): Boolean {
+        val enabledServices = Settings.Secure.getString(
+            contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: return false
+        return enabledServices.contains(packageName, ignoreCase = true)
     }
 
     @SuppressLint("SetTextI18n")
@@ -161,11 +179,21 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
         cardPerm.addView(btnOverlayPerm)
 
         btnAccessPerm = createActionButton("⚠️ 步驟 2：點此開啟「無障礙自動點擊服務」", "#334155", Color.WHITE) {
-            Toast.makeText(
-                this,
-                "請在無障礙設定中找到「定時多點連點器」並開啟開關",
-                Toast.LENGTH_LONG
-            ).show()
+            val sysOn = isAccessibilityEnabledInSystem()
+            val bound = AutoClickAccessibilityService.instance != null
+            if (sysOn && !bound) {
+                Toast.makeText(
+                    this,
+                    "提示：因為剛才強制關閉了程式，請將無障礙開關「先關掉、再打開一次」即可恢復連線！",
+                    Toast.LENGTH_LONG
+                ).show()
+            } else {
+                Toast.makeText(
+                    this,
+                    "請在無障礙設定中找到「定時多點連點器」並開啟開關",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
             val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
             startActivity(intent)
         }.apply {
@@ -198,10 +226,10 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        etHour = createNumberEdit(2)
-        etMinute = createNumberEdit(2)
-        etSecond = createNumberEdit(2)
-        etDeci = createNumberEdit(1)
+        etHour = createNumberEdit()
+        etMinute = createNumberEdit()
+        etSecond = createNumberEdit()
+        etDeci = createNumberEdit()
 
         timeInputRow.addView(createLabeledInput("時(0-23)", etHour))
         timeInputRow.addView(createLabeledInput("分(0-59)", etMinute))
@@ -224,7 +252,6 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
                 0
             )
             populateInputsFromPrefs()
-            AutoClickAccessibilityService.instance?.showOrUpdateOverlay()
             Toast.makeText(this, "已設為 15 秒後 (${ClickerPrefs.formatTargetTimeString()})", Toast.LENGTH_SHORT).show()
         }
         val btnNextMin = createSmallBtn("🕐 設為下一整分", "#334155") {
@@ -253,7 +280,7 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
         cardTime.addView(quickTimeRow)
 
         val btnSaveTime = createActionButton("💾 儲存觸發時間設定", "#38BDF8", Color.parseColor("#0F172A")) {
-            saveTimeAndSequenceSettings(showToast = true)
+            saveTimeAndSequenceSettings(showToast = true, updateMarkersIfShowing = true)
         }
         cardTime.addView(btnSaveTime)
         root.addView(cardTime)
@@ -266,8 +293,8 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, 0, 0, dp(8f))
         }
-        etClicksPerPoint = createNumberEdit(3)
-        etTotalCycles = createNumberEdit(3)
+        etClicksPerPoint = createNumberEdit()
+        etTotalCycles = createNumberEdit()
         gridRow1.addView(createLabeledInput("每點位連點幾次", etClicksPerPoint))
         gridRow1.addView(createLabeledInput("整組順序循環幾輪", etTotalCycles))
         cardSeq.addView(gridRow1)
@@ -276,14 +303,14 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, 0, 0, dp(10f))
         }
-        etSameInterval = createNumberEdit(4)
-        etNextDelay = createNumberEdit(5)
+        etSameInterval = createNumberEdit()
+        etNextDelay = createNumberEdit()
         gridRow2.addView(createLabeledInput("同點連點間隔(ms)", etSameInterval))
         gridRow2.addView(createLabeledInput("切換下一點間隔(ms)", etNextDelay))
         cardSeq.addView(gridRow2)
 
         val btnSaveSeq = createActionButton("💾 套用次數與間隔至所有點位", "#00E676", Color.parseColor("#0F172A")) {
-            saveTimeAndSequenceSettings(showToast = true)
+            saveTimeAndSequenceSettings(showToast = true, updateMarkersIfShowing = true)
         }
         cardSeq.addView(btnSaveSeq)
 
@@ -306,12 +333,16 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
         }
         val btnAddPtMain = createSmallBtn("➕ 新增一個點位", "#334155") {
             ClickerPrefs.addNewPoint(this)
-            AutoClickAccessibilityService.instance?.rebuildTargetMarkers()
+            if (AutoClickAccessibilityService.isOverlayShowing) {
+                AutoClickAccessibilityService.instance?.rebuildTargetMarkers()
+            }
             refreshStatusAndPointsUi()
         }
         val btnRemPtMain = createSmallBtn("➖ 移除最後點位", "#334155") {
             if (ClickerPrefs.removeLastPoint(this)) {
-                AutoClickAccessibilityService.instance?.rebuildTargetMarkers()
+                if (AutoClickAccessibilityService.isOverlayShowing) {
+                    AutoClickAccessibilityService.instance?.rebuildTargetMarkers()
+                }
                 refreshStatusAndPointsUi()
             } else {
                 Toast.makeText(this, "至少需保留 1 個點位", Toast.LENGTH_SHORT).show()
@@ -338,7 +369,7 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
         tvTargetSummary.text = "目前設定觸發時刻：${ClickerPrefs.formatTargetTimeString()}"
     }
 
-    private fun saveTimeAndSequenceSettings(showToast: Boolean) {
+    private fun saveTimeAndSequenceSettings(showToast: Boolean, updateMarkersIfShowing: Boolean) {
         val hr = etHour.text.toString().toIntOrNull()?.coerceIn(0, 23) ?: ClickerPrefs.targetHour
         val min = etMinute.text.toString().toIntOrNull()?.coerceIn(0, 59) ?: ClickerPrefs.targetMinute
         val sec = etSecond.text.toString().toIntOrNull()?.coerceIn(0, 59) ?: ClickerPrefs.targetSecond
@@ -360,7 +391,9 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
         )
 
         populateInputsFromPrefs()
-        AutoClickAccessibilityService.instance?.rebuildTargetMarkers()
+        if (updateMarkersIfShowing && AutoClickAccessibilityService.isOverlayShowing) {
+            AutoClickAccessibilityService.instance?.rebuildTargetMarkers()
+        }
         refreshStatusAndPointsUi()
 
         if (showToast) {
@@ -380,12 +413,19 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
         }
         val svc = AutoClickAccessibilityService.instance
         if (svc == null) {
-            Toast.makeText(this, "請先完成步驟 2：開啟「定時多點連點器」無障礙服務", Toast.LENGTH_LONG).show()
+            val sysOn = isAccessibilityEnabledInSystem()
+            val msg = if (sysOn) {
+                "無障礙開關雖已開啟，但服務曾被系統強制中斷。請點進「定時多點連點器」將開關「先關再開」即可恢復！"
+            } else {
+                "請先完成步驟 2：開啟「定時多點連點器」無障礙服務"
+            }
+            Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             return
         }
 
-        saveTimeAndSequenceSettings(showToast = false)
+        // 先儲存設定但不觸發重複重建，統一交給 showOrUpdateOverlay / hideOverlay 處理
+        saveTimeAndSequenceSettings(showToast = false, updateMarkersIfShowing = false)
         if (AutoClickAccessibilityService.isOverlayShowing) {
             svc.hideOverlay()
         } else {
@@ -419,7 +459,8 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
     @SuppressLint("SetTextI18n")
     private fun refreshStatusAndPointsUi() {
         val hasOverlay = Settings.canDrawOverlays(this)
-        val hasAccess = AutoClickAccessibilityService.instance != null
+        val isServiceBound = AutoClickAccessibilityService.instance != null
+        val isSysSettingOn = isAccessibilityEnabledInSystem()
 
         if (hasOverlay) {
             btnOverlayPerm.text = "✅ 步驟 1：懸浮視窗權限（已開啟）"
@@ -431,10 +472,14 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
             btnOverlayPerm.setTextColor(Color.parseColor("#0F172A"))
         }
 
-        if (hasAccess) {
-            btnAccessPerm.text = "✅ 步驟 2：無障礙自動點擊服務（已開啟）"
+        if (isServiceBound) {
+            btnAccessPerm.text = "✅ 步驟 2：無障礙自動點擊服務（已啟動連線）"
             btnAccessPerm.background = rounded("#1E293B", 8f, "#00E676")
             btnAccessPerm.setTextColor(Color.parseColor("#00E676"))
+        } else if (isSysSettingOn) {
+            btnAccessPerm.text = "🔄 步驟 2：系統已開但服務被中斷（點此「關→開」重連）"
+            btnAccessPerm.background = rounded("#38BDF8", 8f)
+            btnAccessPerm.setTextColor(Color.parseColor("#0F172A"))
         } else {
             btnAccessPerm.text = "⚠️ 步驟 2：點此開啟「無障礙自動點擊服務」"
             btnAccessPerm.background = rounded("#F59E0B", 8f)
@@ -489,13 +534,17 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
             val btnMinus = createSmallBtn("-1次", "#334155") {
                 pt.clickCount = (pt.clickCount - 1).coerceAtLeast(1)
                 ClickerPrefs.savePoints(this)
-                AutoClickAccessibilityService.instance?.rebuildTargetMarkers()
+                if (AutoClickAccessibilityService.isOverlayShowing) {
+                    AutoClickAccessibilityService.instance?.rebuildTargetMarkers()
+                }
                 refreshStatusAndPointsUi()
             }
             val btnPlus = createSmallBtn("+1次", "#334155") {
                 pt.clickCount = (pt.clickCount + 1).coerceAtMost(999)
                 ClickerPrefs.savePoints(this)
-                AutoClickAccessibilityService.instance?.rebuildTargetMarkers()
+                if (AutoClickAccessibilityService.isOverlayShowing) {
+                    AutoClickAccessibilityService.instance?.rebuildTargetMarkers()
+                }
                 refreshStatusAndPointsUi()
             }
 
@@ -503,6 +552,20 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
             row.addView(btnMinus)
             row.addView(btnPlus)
             pointsContainer.addView(row)
+        }
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                    101
+                )
+            }
         }
     }
 
@@ -532,7 +595,7 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
         }
     }
 
-    private fun createNumberEdit(maxLen: Int): EditText {
+    private fun createNumberEdit(): EditText {
         return EditText(this).apply {
             inputType = InputType.TYPE_CLASS_NUMBER
             setTextColor(Color.WHITE)

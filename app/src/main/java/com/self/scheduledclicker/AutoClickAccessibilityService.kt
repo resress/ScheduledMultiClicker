@@ -3,8 +3,13 @@ package com.self.scheduledclicker
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.annotation.SuppressLint
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -12,6 +17,7 @@ import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
@@ -26,15 +32,17 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.app.NotificationCompat
 import java.util.TimeZone
 import kotlin.concurrent.thread
 import kotlin.math.abs
 
 /**
  * 負責：
- * 1. 顯示懸浮控制列（即時時鐘 HH:mm:ss.S、新增/減少點位、定時待命、立即測試、緊急停止）
- * 2. 顯示可拖曳的編號準星（①、②、③...），待命與點擊時自動切換為 FLAG_NOT_TOUCHABLE 100% 觸控穿透
- * 3. 時間到達指定時刻（精準至 0.1 秒 / 毫秒級別監測）時，依序針對每個點位執行指定次數的自動點擊與循環
+ * 1. 常駐前景保活（防止重新讀取或滑掉 App 時無障礙服務被系統切斷）
+ * 2. 顯示懸浮控制列（即時時鐘 HH:mm:ss.S、新增/減少點位、定時待命、立即測試、緊急停止）
+ * 3. 顯示可拖曳的編號準星（#1、#2、#3...），確保每次更新或減少點位時徹底移除舊準星不殘留
+ * 4. 時間到達指定時刻（精準至 0.1 秒）時，依序針對每個點位執行指定次數的自動點擊與循環
  */
 class AutoClickAccessibilityService : AccessibilityService(), Choreographer.FrameCallback {
 
@@ -46,6 +54,8 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
 
     companion object {
         const val ACTION_STATE_CHANGED = "com.self.scheduledclicker.STATE_CHANGED"
+        private const val CHANNEL_ID = "scheduled_multi_clicker_channel"
+        private const val NOTIF_ID = 2001
 
         @Volatile
         var instance: AutoClickAccessibilityService? = null
@@ -90,6 +100,8 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
         ClickerPrefs.init(this)
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         instance = this
+        startForegroundKeepAlive()
+
         if (!ClickerPrefs.isNtpSynced) {
             thread(start = true) {
                 SntpClient.syncTimeBestOf().onSuccess { ntp ->
@@ -98,6 +110,11 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
             }
         }
         broadcastState()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // 當使用者從最近使用的應用程式滑掉主畫面時，保持無障礙服務常駐不斷線
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -116,45 +133,94 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
         super.onDestroy()
     }
 
-    /**
-     * 顯示或更新懸浮控制面板與所有編號準星 ①②③...
-     */
-    fun showOrUpdateOverlay() {
-        if (!Settings.canDrawOverlays(this)) {
-            Toast.makeText(this, "請先授予「懸浮視窗」權限", Toast.LENGTH_SHORT).show()
-            return
-        }
-        if (!isOverlayShowing) {
-            createControlPanel()
-            rebuildTargetMarkers()
-            isOverlayShowing = true
-            Choreographer.getInstance().postFrameCallback(this)
-            broadcastState()
-        } else {
-            rebuildTargetMarkers()
-            updateControlPanelUi()
-            broadcastState()
+    private fun startForegroundKeepAlive() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = NotificationChannel(
+                    CHANNEL_ID,
+                    "定時多點連點器常駐服務",
+                    NotificationManager.IMPORTANCE_LOW
+                ).apply {
+                    description = "確保重新開啟程式或切換背景時，無障礙自動點擊服務不會被系統中斷"
+                    setShowBadge(false)
+                }
+                val nm = getSystemService(NotificationManager::class.java)
+                nm.createNotificationChannel(channel)
+            }
+
+            val openIntent = Intent(this, MainActivity::class.java)
+            val pendingOpen = PendingIntent.getActivity(
+                this, 0, openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val notif: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_clicker)
+                .setContentTitle("定時多點連點器已就緒")
+                .setContentText("無障礙點擊服務保持連線中 · 點擊返回設定面板")
+                .setContentIntent(pendingOpen)
+                .setOngoing(true)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .build()
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(NOTIF_ID, notif)
+            }
+        } catch (_: Exception) {
         }
     }
 
     /**
-     * 隱藏懸浮面板與所有準星
+     * 顯示或更新懸浮控制面板與所有編號準星 ①②③...
      */
-    fun hideOverlay() {
-        stopAllExecution()
-        Choreographer.getInstance().removeFrameCallback(this)
-        clearTargetMarkers()
-        controlPanelView?.let {
-            if (it.isAttachedToWindow) {
-                try {
-                    windowManager.removeView(it)
-                } catch (_: Exception) {
-                }
+    fun showOrUpdateOverlay() {
+        mainHandler.post {
+            if (!Settings.canDrawOverlays(this)) {
+                Toast.makeText(this, "請先授予「懸浮視窗」權限", Toast.LENGTH_SHORT).show()
+                return@post
+            }
+            if (!isOverlayShowing) {
+                isOverlayShowing = true
+                createControlPanel()
+                rebuildTargetMarkers()
+                Choreographer.getInstance().removeFrameCallback(this)
+                Choreographer.getInstance().postFrameCallback(this)
+                broadcastState()
+            } else {
+                rebuildTargetMarkers()
+                updateControlPanelUi()
+                broadcastState()
             }
         }
+    }
+
+    /**
+     * 隱藏懸浮面板與所有準星（徹底清除螢幕上所有視窗）
+     */
+    fun hideOverlay() {
+        mainHandler.post {
+            stopAllExecution()
+            isOverlayShowing = false
+            Choreographer.getInstance().removeFrameCallback(this)
+            clearTargetMarkers()
+            removeControlPanelViewSafely()
+            broadcastState()
+        }
+    }
+
+    private fun removeControlPanelViewSafely() {
+        val v = controlPanelView ?: return
         controlPanelView = null
-        isOverlayShowing = false
-        broadcastState()
+        try {
+            windowManager.removeViewImmediate(v)
+        } catch (_: Exception) {
+            try {
+                windowManager.removeView(v)
+            } catch (_: Exception) {
+            }
+        }
     }
 
     /**
@@ -194,13 +260,11 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
             stopAllExecution()
             return
         }
-        // 先開啟準星觸控穿透，確保稍後點選不會點到準星自己
         currentState = EngineState.CLICKING
         setMarkersTouchPassthrough(true)
         updateControlPanelUi()
         broadcastState()
 
-        // 給予 60ms 讓 WindowManager 完成 FLAG_NOT_TOUCHABLE 更新後立即開始依序點擊
         val token = ++clickSequenceToken
         mainHandler.postDelayed({
             if (token == clickSequenceToken && currentState == EngineState.CLICKING) {
@@ -226,6 +290,7 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
 
     @SuppressLint("ClickableViewAccessibility", "SetTextI18n")
     private fun createControlPanel() {
+        removeControlPanelViewSafely()
         val context = this
         val root = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -399,108 +464,119 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
     }
 
     /**
-     * 根據 ClickerPrefs.points 重新建立螢幕上的編號準星 ①, ②, ③...
+     * 根據 ClickerPrefs.points 重新建立螢幕上的編號準星 #1, #2, #3...
+     * 注意：若目前懸浮窗未開啟 (isOverlayShowing == false)，只會清除殘留準星，不會新增視窗！
      */
     @SuppressLint("ClickableViewAccessibility")
     fun rebuildTargetMarkers() {
-        clearTargetMarkers()
-        val sizePx = dp(46f)
-        val passthrough = currentState != EngineState.IDLE
+        mainHandler.post {
+            clearTargetMarkers()
+            if (!isOverlayShowing) return@post
 
-        for ((idx, ptConfig) in ClickerPrefs.points.withIndex()) {
-            val number = idx + 1
-            val markerView = TargetCrosshairView(this, number, ptConfig.clickCount).apply {
-                alpha = if (passthrough) 0.55f else 0.95f
-            }
+            val sizePx = dp(46f)
+            val passthrough = currentState != EngineState.IDLE
 
-            val flags = buildMarkerWindowFlags(passthrough)
-            val params = WindowManager.LayoutParams(
-                sizePx,
-                sizePx,
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                flags,
-                PixelFormat.TRANSLUCENT
-            ).apply {
-                gravity = Gravity.TOP or Gravity.START
-                x = ptConfig.x
-                y = ptConfig.y
-            }
-
-            var startX = 0
-            var startY = 0
-            var rawStartX = 0f
-            var rawStartY = 0f
-            var moved = false
-
-            markerView.setOnTouchListener { _, ev ->
-                if (currentState != EngineState.IDLE) return@setOnTouchListener false
-                when (ev.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        startX = params.x
-                        startY = params.y
-                        rawStartX = ev.rawX
-                        rawStartY = ev.rawY
-                        moved = false
-                        true
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        val dx = (ev.rawX - rawStartX).toInt()
-                        val dy = (ev.rawY - rawStartY).toInt()
-                        if (abs(dx) > 5 || abs(dy) > 5) moved = true
-                        params.x = startX + dx
-                        params.y = startY + dy
-                        ptConfig.x = params.x
-                        ptConfig.y = params.y
-                        try {
-                            windowManager.updateViewLayout(markerView, params)
-                        } catch (_: Exception) {
-                        }
-                        true
-                    }
-                    MotionEvent.ACTION_UP -> {
-                        if (moved) {
-                            ClickerPrefs.savePoints(this)
-                        } else {
-                            // 單擊準星可快速循環切換該點位的點擊次數 (1 -> 2 -> 3 -> 5 -> 10 -> 1)
-                            val nextCount = when (ptConfig.clickCount) {
-                                1 -> 2
-                                2 -> 3
-                                3 -> 5
-                                5 -> 10
-                                else -> 1
-                            }
-                            ptConfig.clickCount = nextCount
-                            markerView.clickCount = nextCount
-                            markerView.invalidate()
-                            ClickerPrefs.savePoints(this)
-                            broadcastState()
-                            Toast.makeText(
-                                this,
-                                "點位 #$number 設定為連點 $nextCount 次（亦可在主畫面自訂任意次數）",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        }
-                        true
-                    }
-                    else -> false
+            for ((idx, ptConfig) in ClickerPrefs.points.withIndex()) {
+                val number = idx + 1
+                val markerView = TargetCrosshairView(this, number, ptConfig.clickCount).apply {
+                    alpha = if (passthrough) 0.55f else 0.95f
                 }
-            }
 
-            windowManager.addView(markerView, params)
-            markerHolders.add(TargetMarkerHolder(number, ptConfig, markerView, params))
+                val flags = buildMarkerWindowFlags(passthrough)
+                val params = WindowManager.LayoutParams(
+                    sizePx,
+                    sizePx,
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    flags,
+                    PixelFormat.TRANSLUCENT
+                ).apply {
+                    gravity = Gravity.TOP or Gravity.START
+                    x = ptConfig.x
+                    y = ptConfig.y
+                }
+
+                var startX = 0
+                var startY = 0
+                var rawStartX = 0f
+                var rawStartY = 0f
+                var moved = false
+
+                markerView.setOnTouchListener { _, ev ->
+                    if (currentState != EngineState.IDLE) return@setOnTouchListener false
+                    when (ev.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> {
+                            startX = params.x
+                            startY = params.y
+                            rawStartX = ev.rawX
+                            rawStartY = ev.rawY
+                            moved = false
+                            true
+                        }
+                        MotionEvent.ACTION_MOVE -> {
+                            val dx = (ev.rawX - rawStartX).toInt()
+                            val dy = (ev.rawY - rawStartY).toInt()
+                            if (abs(dx) > 5 || abs(dy) > 5) moved = true
+                            params.x = startX + dx
+                            params.y = startY + dy
+                            ptConfig.x = params.x
+                            ptConfig.y = params.y
+                            try {
+                                windowManager.updateViewLayout(markerView, params)
+                            } catch (_: Exception) {
+                            }
+                            true
+                        }
+                        MotionEvent.ACTION_UP -> {
+                            if (moved) {
+                                ClickerPrefs.savePoints(this)
+                            } else {
+                                // 單擊準星可快速循環切換該點位的點擊次數 (1 -> 2 -> 3 -> 5 -> 10 -> 1)
+                                val nextCount = when (ptConfig.clickCount) {
+                                    1 -> 2
+                                    2 -> 3
+                                    3 -> 5
+                                    5 -> 10
+                                    else -> 1
+                                }
+                                ptConfig.clickCount = nextCount
+                                markerView.clickCount = nextCount
+                                markerView.invalidate()
+                                ClickerPrefs.savePoints(this)
+                                broadcastState()
+                                Toast.makeText(
+                                    this,
+                                    "點位 #$number 設定為連點 $nextCount 次",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                            true
+                        }
+                        else -> false
+                    }
+                }
+
+                windowManager.addView(markerView, params)
+                markerHolders.add(TargetMarkerHolder(number, ptConfig, markerView, params))
+            }
         }
     }
 
+    /**
+     * 強制立即從 WindowManager 移除所有準星視圖（不檢查 isAttachedToWindow，杜絕同幀重複呼叫造成的孤兒殘留視窗）
+     */
     private fun clearTargetMarkers() {
-        for (h in markerHolders) {
-            if (h.view.isAttachedToWindow) {
+        val copy = markerHolders.toList()
+        markerHolders.clear()
+        for (h in copy) {
+            try {
+                windowManager.removeViewImmediate(h.view)
+            } catch (_: Exception) {
                 try {
                     windowManager.removeView(h.view)
                 } catch (_: Exception) {
                 }
             }
         }
-        markerHolders.clear()
     }
 
     private fun buildMarkerWindowFlags(passthrough: Boolean): Int {
@@ -519,11 +595,9 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
             h.view.alpha = if (passthrough) 0.50f else 0.95f
             if (h.params.flags != flags) {
                 h.params.flags = flags
-                if (h.view.isAttachedToWindow) {
-                    try {
-                        windowManager.updateViewLayout(h.view, h.params)
-                    } catch (_: Exception) {
-                    }
+                try {
+                    windowManager.updateViewLayout(h.view, h.params)
+                } catch (_: Exception) {
                 }
             }
         }
@@ -596,7 +670,7 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
 
         val timeStr = String.format("%02d:%02d:%02d.%d", hr, min, sec, deci)
         val statusStr = when (currentState) {
-            EngineState.IDLE -> "可拖曳準星 (共${markerHolders.size}點·可循環${ClickerPrefs.totalCycles}輪)"
+            EngineState.IDLE -> "可拖曳準星 (共${ClickerPrefs.points.size}點·可循環${ClickerPrefs.totalCycles}輪)"
             EngineState.ARMED -> {
                 val remainSec = ((scheduledTriggerEpochMs - nowMs) / 1000.0).coerceAtLeast(0.0)
                 String.format("⏳待命 %s (剩%.1fs)", ClickerPrefs.formatTargetTimeString(), remainSec)
@@ -615,7 +689,6 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
     private fun executeMultiPointSequence(token: Int) {
         if (token != clickSequenceToken || currentState != EngineState.CLICKING) return
 
-        // 先擷取每個準星在螢幕上的精確中心像素座標
         data class ExecutionTarget(
             val index: Int,
             val centerX: Float,
@@ -653,7 +726,6 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
             if (token != clickSequenceToken || currentState != EngineState.CLICKING) return
 
             if (cycleIdx >= totalCycles) {
-                // 全部輪數與點位執行完畢！
                 stopAllExecution()
                 Toast.makeText(
                     this,
@@ -669,12 +741,10 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
 
                 val nextClickIdx = clickIdx + 1
                 if (nextClickIdx < target.clickCount) {
-                    // 同一點位還要繼續點下一次
                     mainHandler.postDelayed({
                         runStep(cycleIdx, targetIdx, nextClickIdx)
                     }, samePointInterval)
                 } else {
-                    // 此點位已點夠次數，前往下一個點位（或下一輪）
                     val nextTargetIdx = targetIdx + 1
                     if (nextTargetIdx < targets.size) {
                         mainHandler.postDelayed({
@@ -772,18 +842,14 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
             val cy = height / 2f
             val radius = (width.coerceAtMost(height) / 2f) - dpF(2f)
 
-            // 圓盤與外框
             canvas.drawCircle(cx, cy, radius, bgPaint)
             canvas.drawCircle(cx, cy, radius, ringPaint)
 
-            // 十字線
             canvas.drawLine(cx - radius * 0.7f, cy, cx + radius * 0.7f, cy, crossPaint)
             canvas.drawLine(cx, cy - radius * 0.7f, cx, cy + radius * 0.7f, crossPaint)
 
-            // 中心紅點（實際點擊落點）
             canvas.drawCircle(cx, cy, dpF(2.5f), centerDotPaint)
 
-            // 上半部顯示點位順序編號 (#1, #2...)，下半部顯示點擊次數 (xN)
             canvas.drawText("#$number", cx, cy - dpF(4f), textPaint)
             canvas.drawText("×${clickCount}次", cx, cy + dpF(13f), subTextPaint)
         }

@@ -5,6 +5,10 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- NTP 網路校準權限 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 前景服務權限（防止滑掉 App 時無障礙服務被系統強制終止） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="true"
@@ -25,11 +29,13 @@
             </intent-filter>
         </activity>
 
-        <!-- 無障礙自動點擊與懸浮準星服務 -->
+        <!-- 無障礙自動點擊與懸浮準星服務（stopWithTask="false" 避免重開或滑掉主畫面時服務斷線） -->
         <service
             android:name=".AutoClickAccessibilityService"
             android:enabled="true"
-            android:exported="false"
+            android:exported="true"
+            android:stopWithTask="false"
+            android:foregroundServiceType="specialUse"
             android:label="@string/accessibility_service_label"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
@@ -38,6 +44,9 @@
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="scheduled_multi_point_auto_clicker_overlay" />
         </service>
 
     </application>
