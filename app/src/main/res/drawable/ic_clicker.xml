@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 深色圓底 -->
+    <path
+        android:fillColor="#0F172A"
+        android:pathData="M12,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2z" />
+    <!-- 準星外環 -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M12,4c4.41,0 8,3.59 8,8s-3.59,8 -8,8 -8,-3.59 -8,-8 3.59,-8 8,-8m0,-2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2z" />
+    <!-- 準星十字與中心紅點 -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M11,5h2v4h-2zM11,15h2v4h-2zM5,11h4v2H5zM15,11h4v2h-4z" />
+    <path
+        android:fillColor="#F43F5E"
+        android:pathData="M12,10a2,2 0 1,0 0,4a2,2 0 1,0 0,-4z" />
+</vector>

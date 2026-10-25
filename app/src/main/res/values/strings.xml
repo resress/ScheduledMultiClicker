@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">定時多點連點器</string>
+    <string name="accessibility_service_label">定時多點連點器（自動點擊服務）</string>
+    <string name="accessibility_service_desc">用於在您指定的時間到達時，自動依序點擊螢幕上設定好的多個準星位置（①→②→③）。本服務不會讀取任何畫面文字或個資。</string>
+</resources>
