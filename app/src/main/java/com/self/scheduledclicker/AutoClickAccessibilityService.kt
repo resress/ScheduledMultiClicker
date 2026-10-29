@@ -41,8 +41,9 @@ import kotlin.math.abs
  * 負責：
  * 1. 常駐前景保活（防止重新讀取或滑掉 App 時無障礙服務被系統切斷）
  * 2. 顯示懸浮控制列（即時時鐘 HH:mm:ss.S、新增/減少點位、定時待命、立即測試、緊急停止）
- * 3. 顯示可拖曳的編號準星（#1、#2、#3...），確保每次更新或減少點位時徹底移除舊準星不殘留
- * 4. 時間到達指定時刻（精準至 0.1 秒）時，依序針對每個點位執行指定次數的自動點擊與循環
+ * 3. 顯示可拖曳的編號準星（#1、#2、#3...）
+ * 4. 防遮蔽隱身模式（Stealth Mode）：在點擊瞬間將所有準星移出螢幕範圍，避開 Android FilterTouchesWhenObscured，相容蝦皮等電商與安全結帳按鈕！
+ * 5. 跳頁不斷線：忽略系統 onInterrupt 干擾，即使頁面跳轉、對話框彈出依然依序精準連點！
  */
 class AutoClickAccessibilityService : AccessibilityService(), Choreographer.FrameCallback {
 
@@ -113,16 +114,16 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // 當使用者從最近使用的應用程式滑掉主畫面時，保持無障礙服務常駐不斷線
         super.onTaskRemoved(rootIntent)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // 不讀取任何螢幕內容，僅使用手勢點擊功能
+        // 不讀取螢幕內容，確保最高執行效能與隱私安全
     }
 
     override fun onInterrupt() {
-        stopAllExecution()
+        // 重要修復：跳轉畫面、對話框跳出或輸入法彈出時，Android 系統會呼叫 onInterrupt()。
+        // 此處絕對不能呼叫 stopAllExecution()，否則跳轉畫面時連點會被直接中斷！
     }
 
     override fun onDestroy() {
@@ -172,9 +173,6 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
         }
     }
 
-    /**
-     * 顯示或更新懸浮控制面板與所有編號準星 ①②③...
-     */
     fun showOrUpdateOverlay() {
         mainHandler.post {
             if (!Settings.canDrawOverlays(this)) {
@@ -196,9 +194,6 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
         }
     }
 
-    /**
-     * 隱藏懸浮面板與所有準星（徹底清除螢幕上所有視窗）
-     */
     fun hideOverlay() {
         mainHandler.post {
             stopAllExecution()
@@ -223,9 +218,6 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
         }
     }
 
-    /**
-     * 啟動「定時待命」模式：鎖定所有準星（啟用觸控穿透），等設定時刻一到立即開點
-     */
     fun startScheduledStandby() {
         if (!isOverlayShowing) {
             showOrUpdateOverlay()
@@ -249,9 +241,6 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
         ).show()
     }
 
-    /**
-     * 立即測試執行一次完整的多點依序連點
-     */
     fun startImmediateTest() {
         if (!isOverlayShowing) {
             showOrUpdateOverlay()
@@ -270,21 +259,19 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
             if (token == clickSequenceToken && currentState == EngineState.CLICKING) {
                 executeMultiPointSequence(token)
             }
-        }, 60L)
+        }, 50L)
     }
 
-    /**
-     * 緊急停止待命或點擊，恢復準星可拖曳狀態
-     */
     fun stopAllExecution(showToast: Boolean = false) {
         clickSequenceToken++
         val wasRunning = currentState != EngineState.IDLE
         currentState = EngineState.IDLE
+        restoreMarkersToOriginalPositions()
         setMarkersTouchPassthrough(false)
         updateControlPanelUi()
         broadcastState()
         if (showToast && wasRunning) {
-            Toast.makeText(this, "⏹️ 已停止並解鎖準星位置", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "⏹️ 已停止並恢復準星顯示", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -303,7 +290,6 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
             }
         }
 
-        // 第一列：可拖曳標題 + 即時時間與狀態
         val tvHeader = TextView(context).apply {
             text = "✥ 00:00:00.0 | 編輯準星中"
             typeface = Typeface.MONOSPACE
@@ -314,7 +300,6 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
         tvClockAndStatus = tvHeader
         root.addView(tvHeader)
 
-        // 第二列：操作按鈕列
         val btnRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -392,7 +377,6 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
             y = ClickerPrefs.getPanelY(context)
         }
 
-        // 拖曳控制面板手勢
         var initX = 0
         var initY = 0
         var touchX = 0f
@@ -463,10 +447,6 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
         }
     }
 
-    /**
-     * 根據 ClickerPrefs.points 重新建立螢幕上的編號準星 #1, #2, #3...
-     * 注意：若目前懸浮窗未開啟 (isOverlayShowing == false)，只會清除殘留準星，不會新增視窗！
-     */
     @SuppressLint("ClickableViewAccessibility")
     fun rebuildTargetMarkers() {
         mainHandler.post {
@@ -530,7 +510,6 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
                             if (moved) {
                                 ClickerPrefs.savePoints(this)
                             } else {
-                                // 單擊準星可快速循環切換該點位的點擊次數 (1 -> 2 -> 3 -> 5 -> 10 -> 1)
                                 val nextCount = when (ptConfig.clickCount) {
                                     1 -> 2
                                     2 -> 3
@@ -561,9 +540,6 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
         }
     }
 
-    /**
-     * 強制立即從 WindowManager 移除所有準星視圖（不檢查 isAttachedToWindow，杜絕同幀重複呼叫造成的孤兒殘留視窗）
-     */
     private fun clearTargetMarkers() {
         val copy = markerHolders.toList()
         markerHolders.clear()
@@ -599,6 +575,35 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
                     windowManager.updateViewLayout(h.view, h.params)
                 } catch (_: Exception) {
                 }
+            }
+        }
+    }
+
+    /**
+     * 防遮蔽關鍵功能：將所有準星暫時移出螢幕可視區域
+     * 讓蝦皮等含有 filterTouchesWhenObscured 的敏感按鈕上方 100% 毫無遮擋！
+     */
+    private fun moveMarkersOffScreenForStealth() {
+        for (h in markerHolders) {
+            h.params.x = -10000
+            h.params.y = -10000
+            try {
+                windowManager.updateViewLayout(h.view, h.params)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /**
+     * 點擊結束後將所有準星還原至原本設定的位置
+     */
+    private fun restoreMarkersToOriginalPositions() {
+        for (h in markerHolders) {
+            h.params.x = h.config.x
+            h.params.y = h.config.y
+            try {
+                windowManager.updateViewLayout(h.view, h.params)
+            } catch (_: Exception) {
             }
         }
     }
@@ -641,7 +646,6 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
         if (!isOverlayShowing) return
         val now = ClickerPrefs.getAccurateTimeMillis()
 
-        // 檢查是否到達定時觸發時間
         if (currentState == EngineState.ARMED && now >= scheduledTriggerEpochMs) {
             currentState = EngineState.CLICKING
             updateControlPanelUi()
@@ -682,9 +686,7 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
 
     /**
      * 依序執行多點連點：
-     * 外迴圈：第 1 輪 .. totalCycles 輪
-     *   內迴圈：點位 ① .. 點位 Ⓝ
-     *     點位連點：第 1 次 .. pt.clickCount 次
+     * 支援跳頁持續連點、防遮蔽移位（蝦皮結帳相容）
      */
     private fun executeMultiPointSequence(token: Int) {
         if (token != clickSequenceToken || currentState != EngineState.CLICKING) return
@@ -697,12 +699,23 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
             val delayAfterMs: Long
         )
 
+        // 1. 預先記錄所有點位中心點的真實螢幕像素座標
         val targets = mutableListOf<ExecutionTarget>()
         val loc = IntArray(2)
+        val halfSize = dp(23f).toFloat() // 準星 46dp 的一半
+
         for (h in markerHolders) {
-            h.view.getLocationOnScreen(loc)
-            val cx = loc[0] + h.view.width / 2f
-            val cy = loc[1] + h.view.height / 2f
+            val cx: Float
+            val cy: Float
+            if (h.view.isAttachedToWindow && h.view.width > 0) {
+                h.view.getLocationOnScreen(loc)
+                cx = loc[0] + h.view.width / 2f
+                cy = loc[1] + h.view.height / 2f
+            } else {
+                cx = h.config.x + halfSize
+                cy = h.config.y + halfSize
+            }
+
             targets.add(
                 ExecutionTarget(
                     index = h.index,
@@ -719,11 +732,19 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
             return
         }
 
+        // 2. 防遮蔽模式：在點擊期間將準星移出螢幕外，避免觸發蝦皮等 App 的 filterTouchesWhenObscured
+        if (ClickerPrefs.isStealthMode) {
+            moveMarkersOffScreenForStealth()
+        }
+
         val totalCycles = ClickerPrefs.totalCycles.coerceAtLeast(1)
         val samePointInterval = ClickerPrefs.samePointIntervalMs.coerceAtLeast(20L)
 
         fun runStep(cycleIdx: Int, targetIdx: Int, clickIdx: Int) {
-            if (token != clickSequenceToken || currentState != EngineState.CLICKING) return
+            if (token != clickSequenceToken || currentState != EngineState.CLICKING) {
+                restoreMarkersToOriginalPositions()
+                return
+            }
 
             if (cycleIdx >= totalCycles) {
                 stopAllExecution()
@@ -736,8 +757,12 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
             }
 
             val target = targets[targetIdx]
-            performTapAt(target.centerX, target.centerY, durationMs = 22L) {
-                if (token != clickSequenceToken || currentState != EngineState.CLICKING) return@performTapAt
+            // duration 改為 55ms，最符合真實手指點選時長，相容各電商平台防抖與防作弊
+            performTapAt(target.centerX, target.centerY, durationMs = 55L) {
+                if (token != clickSequenceToken || currentState != EngineState.CLICKING) {
+                    restoreMarkersToOriginalPositions()
+                    return@performTapAt
+                }
 
                 val nextClickIdx = clickIdx + 1
                 if (nextClickIdx < target.clickCount) {
@@ -747,10 +772,12 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
                 } else {
                     val nextTargetIdx = targetIdx + 1
                     if (nextTargetIdx < targets.size) {
+                        // 點下一個點位（此時如果換頁，target.delayAfterMs 提供了充足的跳頁載入時間）
                         mainHandler.postDelayed({
                             runStep(cycleIdx, nextTargetIdx, 0)
                         }, target.delayAfterMs)
                     } else {
+                        // 點下一輪
                         mainHandler.postDelayed({
                             runStep(cycleIdx + 1, 0, 0)
                         }, target.delayAfterMs)
@@ -762,7 +789,7 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
         runStep(0, 0, 0)
     }
 
-    private fun performTapAt(screenX: Float, screenY: Float, durationMs: Long = 22L, onComplete: () -> Unit) {
+    private fun performTapAt(screenX: Float, screenY: Float, durationMs: Long = 55L, onComplete: () -> Unit) {
         val path = Path().apply {
             moveTo(screenX, screenY)
         }
@@ -774,11 +801,12 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
             }
 
             override fun onCancelled(gestureDescription: GestureDescription?) {
-                mainHandler.post { onComplete() }
+                // 如果在換頁瞬間手勢被系統 cancel，短暫延遲 80ms 後接續，避免整個序列崩潰
+                mainHandler.postDelayed({ onComplete() }, 80L)
             }
         }, null)
         if (!ok) {
-            mainHandler.post { onComplete() }
+            mainHandler.postDelayed({ onComplete() }, 80L)
         }
     }
 
@@ -796,9 +824,6 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
             resources.displayMetrics
         ).toInt()
 
-    /**
-     * 自訂繪製的編號準星視圖：外圈 + 十字準星 + 中心精準紅點 + 順序編號與次數標籤
-     */
     private class TargetCrosshairView(
         context: Context,
         val number: Int,

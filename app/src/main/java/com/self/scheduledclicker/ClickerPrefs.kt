@@ -12,13 +12,13 @@ import java.util.Calendar
  * @param x 視窗 X 座標
  * @param y 視窗 Y 座標
  * @param clickCount 到達此點位時要連點幾次
- * @param delayAfterMs 點完此點位後，等待幾毫秒再前往下一個點位
+ * @param delayAfterMs 點完此點位後，等待幾毫秒再前往下一個點位（若為跳轉頁面，建議設定 600~1500ms）
  */
 data class TargetPointConfig(
     var x: Int,
     var y: Int,
     var clickCount: Int = 1,
-    var delayAfterMs: Long = 120L
+    var delayAfterMs: Long = 200L
 )
 
 /**
@@ -39,6 +39,7 @@ object ClickerPrefs {
     private const val KEY_POINTS_JSON = "points_json"
     private const val KEY_PANEL_X = "panel_x"
     private const val KEY_PANEL_Y = "panel_y"
+    private const val KEY_STEALTH_MODE = "stealth_mode" // 防遮蔽隱身模式（蝦皮/電商相容）
 
     @Volatile
     var isNtpSynced: Boolean = false
@@ -75,7 +76,9 @@ object ClickerPrefs {
         private set
     var samePointIntervalMs: Long = 65L
         private set
-    var nextPointDelayMs: Long = 120L
+    var nextPointDelayMs: Long = 300L
+        private set
+    var isStealthMode: Boolean = true // 預設開啟防遮蔽模式，突破蝦皮等防點擊劫持
         private set
 
     val points: MutableList<TargetPointConfig> = mutableListOf()
@@ -94,7 +97,8 @@ object ClickerPrefs {
         defaultClicksPerPoint = p.getInt(KEY_DEFAULT_CLICKS_PER_POINT, 1).coerceIn(1, 999)
         totalCycles = p.getInt(KEY_TOTAL_CYCLES, 1).coerceIn(1, 999)
         samePointIntervalMs = p.getLong(KEY_SAME_POINT_INTERVAL_MS, 65L).coerceIn(20L, 5000L)
-        nextPointDelayMs = p.getLong(KEY_NEXT_POINT_DELAY_MS, 120L).coerceIn(20L, 10000L)
+        nextPointDelayMs = p.getLong(KEY_NEXT_POINT_DELAY_MS, 300L).coerceIn(20L, 10000L)
+        isStealthMode = p.getBoolean(KEY_STEALTH_MODE, true)
 
         loadPoints(context)
     }
@@ -120,8 +124,8 @@ object ClickerPrefs {
             }
         }
         if (points.isEmpty()) {
-            // 預設建立 3 個順序點位 ① → ② → ③
-            points.add(TargetPointConfig(x = 260, y = 450, clickCount = defaultClicksPerPoint, delayAfterMs = nextPointDelayMs))
+            // 預設建立 3 個順序點位 #1 → #2 → #3
+            points.add(TargetPointConfig(x = 260, y = 450, clickCount = defaultClicksPerPoint, delayAfterMs = 600L))
             points.add(TargetPointConfig(x = 260, y = 620, clickCount = defaultClicksPerPoint, delayAfterMs = nextPointDelayMs))
             points.add(TargetPointConfig(x = 260, y = 790, clickCount = defaultClicksPerPoint, delayAfterMs = nextPointDelayMs))
             savePoints(context)
@@ -183,7 +187,7 @@ object ClickerPrefs {
         cycles: Int,
         sameIntervalMs: Long,
         nextDelayMs: Long,
-        applyToAllPoints: Boolean = true
+        applyToAllPoints: Boolean = false
     ) {
         defaultClicksPerPoint = clicksPerPoint.coerceIn(1, 999)
         totalCycles = cycles.coerceIn(1, 999)
@@ -204,6 +208,11 @@ object ClickerPrefs {
             }
             savePoints(context)
         }
+    }
+
+    fun setStealthMode(context: Context, enabled: Boolean) {
+        isStealthMode = enabled
+        prefs(context).edit().putBoolean(KEY_STEALTH_MODE, enabled).apply()
     }
 
     fun savePanelPosition(context: Context, x: Int, y: Int) {
@@ -237,10 +246,6 @@ object ClickerPrefs {
     fun formatTargetTimeString(): String =
         String.format("%02d:%02d:%02d.%d", targetHour, targetMinute, targetSecond, targetDeciSecond)
 
-    /**
-     * 計算下一次目標觸發時間的精準 Epoch 毫秒數。
-     * 若設定的時刻在今天尚未到達，則為今天；若已過期超過 500ms，則自動排程至明天同一時刻。
-     */
     fun computeNextTriggerEpochMs(nowMs: Long = getAccurateTimeMillis()): Long {
         val cal = Calendar.getInstance().apply {
             timeInMillis = nowMs

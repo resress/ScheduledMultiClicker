@@ -26,6 +26,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -55,6 +56,7 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
     private lateinit var etTotalCycles: EditText
     private lateinit var etSameInterval: EditText
     private lateinit var etNextDelay: EditText
+    private lateinit var swStealthMode: Switch
     private lateinit var pointsContainer: LinearLayout
 
     private val clockFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
@@ -87,7 +89,6 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
         isLooping = true
         Choreographer.getInstance().postFrameCallback(this)
         refreshStatusAndPointsUi()
-        // 延遲 500ms 再次更新狀態（等待系統重新綁定無障礙服務）
         mainHandler.postDelayed({ refreshStatusAndPointsUi() }, 500L)
     }
 
@@ -109,9 +110,6 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
         Choreographer.getInstance().postFrameCallback(this)
     }
 
-    /**
-     * 同時檢查系統設定資料庫與服務實例，精準判斷無障礙服務狀態
-     */
     private fun isAccessibilityEnabledInSystem(): Boolean {
         val enabledServices = Settings.Secure.getString(
             contentResolver,
@@ -120,7 +118,7 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
         return enabledServices.contains(packageName, ignoreCase = true)
     }
 
-    @SuppressLint("SetTextI18n")
+    @SuppressLint("SetTextI18n", "UseSwitchCompatOrMaterialCode")
     private fun buildMainView(): View {
         val scroll = ScrollView(this).apply {
             setBackgroundColor(Color.parseColor("#0F172A"))
@@ -142,7 +140,7 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
             typeface = Typeface.DEFAULT_BOLD
         }
         val tvSub = TextView(this).apply {
-            text = "指定時間到達 → 自動依序 #1 → #2 → #3 點選指定次數"
+            text = "支援跳頁不中斷 · 蝦皮等電商防遮蔽模式 · 0.1秒高精準定時"
             setTextColor(Color.parseColor("#94A3B8"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
             setPadding(0, dp(4f), 0, dp(14f))
@@ -184,7 +182,7 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
             if (sysOn && !bound) {
                 Toast.makeText(
                     this,
-                    "提示：因為剛才強制關閉了程式，請將無障礙開關「先關掉、再打開一次」即可恢復連線！",
+                    "提示：請將無障礙開關「先關掉、再打開一次」即可恢復連線！",
                     Toast.LENGTH_LONG
                 ).show()
             } else {
@@ -287,7 +285,7 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
 
         // ================= 卡片 3：點位順序與點擊次數設定 =================
         val cardSeq = createCard()
-        cardSeq.addView(createSectionTitle("🔢 2. 點選次數、循環輪數與間隔設定"))
+        cardSeq.addView(createSectionTitle("🔢 2. 點選次數、間隔與防遮蔽相容設定"))
 
         val gridRow1 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -295,7 +293,7 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
         }
         etClicksPerPoint = createNumberEdit()
         etTotalCycles = createNumberEdit()
-        gridRow1.addView(createLabeledInput("每點位連點幾次", etClicksPerPoint))
+        gridRow1.addView(createLabeledInput("每點位預設連點", etClicksPerPoint))
         gridRow1.addView(createLabeledInput("整組順序循環幾輪", etTotalCycles))
         cardSeq.addView(gridRow1)
 
@@ -306,19 +304,43 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
         etSameInterval = createNumberEdit()
         etNextDelay = createNumberEdit()
         gridRow2.addView(createLabeledInput("同點連點間隔(ms)", etSameInterval))
-        gridRow2.addView(createLabeledInput("切換下一點間隔(ms)", etNextDelay))
+        gridRow2.addView(createLabeledInput("預設切換下一點(ms)", etNextDelay))
         cardSeq.addView(gridRow2)
 
-        val btnSaveSeq = createActionButton("💾 套用次數與間隔至所有點位", "#00E676", Color.parseColor("#0F172A")) {
+        swStealthMode = Switch(this).apply {
+            text = "🛡️ 蝦皮/電商防遮蔽模式（突破 FilterTouchesWhenObscured）"
+            setTextColor(Color.parseColor("#38BDF8"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            typeface = Typeface.DEFAULT_BOLD
+            isChecked = ClickerPrefs.isStealthMode
+            setPadding(0, dp(4f), 0, dp(10f))
+            setOnCheckedChangeListener { _, checked ->
+                ClickerPrefs.setStealthMode(this@MainActivity, checked)
+                val msg = if (checked) "已開啟防遮蔽模式（連點瞬間暫時移開準星，蝦皮結帳按鈕可正常觸發）" else "已關閉防遮蔽模式"
+                Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
+            }
+        }
+        cardSeq.addView(swStealthMode)
+
+        val tvStealthHint = TextView(this).apply {
+            text = "💡 原理解說：蝦皮結帳等畫面會偵測上方是否有懸浮窗遮擋（Tapjacking 防護）。開啟此模式後，連點瞬間會自動將準星移出遮擋區，點完自動還原，100% 正常點擊！"
+            setTextColor(Color.parseColor("#94A3B8"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+            setPadding(0, 0, 0, dp(12f))
+        }
+        cardSeq.addView(tvStealthHint)
+
+        val btnSaveSeq = createActionButton("💾 套用次數與間隔設定", "#00E676", Color.parseColor("#0F172A")) {
             saveTimeAndSequenceSettings(showToast = true, updateMarkersIfShowing = true)
         }
         cardSeq.addView(btnSaveSeq)
 
         val tvPointListHeader = TextView(this).apply {
-            text = "📍 各點位獨立微調（提示：直接「單擊螢幕上的準星」也可快速切換該點點擊次數）："
-            setTextColor(Color.parseColor("#94A3B8"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            setPadding(0, dp(14f), 0, dp(6f))
+            text = "📍 各點位獨立設定（提示：若點完該點會「跳轉新畫面」，請設定較長的換頁等待時間，例如 800~1500ms 等畫面載入完成）："
+            setTextColor(Color.parseColor("#E2E8F0"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, dp(16f), 0, dp(6f))
         }
         cardSeq.addView(tvPointListHeader)
 
@@ -366,6 +388,7 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
         etTotalCycles.setText(ClickerPrefs.totalCycles.toString())
         etSameInterval.setText(ClickerPrefs.samePointIntervalMs.toString())
         etNextDelay.setText(ClickerPrefs.nextPointDelayMs.toString())
+        swStealthMode.isChecked = ClickerPrefs.isStealthMode
         tvTargetSummary.text = "目前設定觸發時刻：${ClickerPrefs.formatTargetTimeString()}"
     }
 
@@ -379,7 +402,7 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
         val clicks = etClicksPerPoint.text.toString().toIntOrNull()?.coerceIn(1, 999) ?: 1
         val cycles = etTotalCycles.text.toString().toIntOrNull()?.coerceIn(1, 999) ?: 1
         val sameMs = etSameInterval.text.toString().toLongOrNull()?.coerceIn(20L, 5000L) ?: 65L
-        val nextMs = etNextDelay.text.toString().toLongOrNull()?.coerceIn(20L, 10000L) ?: 120L
+        val nextMs = etNextDelay.text.toString().toLongOrNull()?.coerceIn(20L, 10000L) ?: 300L
 
         ClickerPrefs.setSequenceConfig(
             context = this,
@@ -387,7 +410,7 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
             cycles = cycles,
             sameIntervalMs = sameMs,
             nextDelayMs = nextMs,
-            applyToAllPoints = true
+            applyToAllPoints = false
         )
 
         populateInputsFromPrefs()
@@ -399,7 +422,7 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
         if (showToast) {
             Toast.makeText(
                 this,
-                "✅ 已儲存！時間 ${ClickerPrefs.formatTargetTimeString()} | 每點 ${clicks}次 × 循環 ${cycles}輪",
+                "✅ 設定已儲存！時間 ${ClickerPrefs.formatTargetTimeString()}",
                 Toast.LENGTH_SHORT
             ).show()
         }
@@ -424,7 +447,6 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
             return
         }
 
-        // 先儲存設定但不觸發重複重建，統一交給 showOrUpdateOverlay / hideOverlay 處理
         saveTimeAndSequenceSettings(showToast = false, updateMarkersIfShowing = false)
         if (AutoClickAccessibilityService.isOverlayShowing) {
             svc.hideOverlay()
@@ -505,29 +527,34 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
 
         tvTargetSummary.text = "目前設定觸發時刻：${ClickerPrefs.formatTargetTimeString()}"
 
-        // 更新點位微調清單
+        // 更新點位微調清單（含次數與跳頁等待延遲）
         pointsContainer.removeAllViews()
         for ((idx, pt) in ClickerPrefs.points.withIndex()) {
             val num = idx + 1
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                val pad = dp(8f)
-                setPadding(pad, dp(6f), pad, dp(6f))
-                background = rounded("#0F172A", 8f)
+            val cardItem = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                val pad = dp(10f)
+                setPadding(pad, pad, pad, pad)
+                background = rounded("#0F172A", 10f, "#334155")
                 val lp = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
                 ).apply {
-                    bottomMargin = dp(6f)
+                    bottomMargin = dp(8f)
                 }
                 layoutParams = lp
             }
 
+            val rowTop = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+
             val tvLabel = TextView(this).apply {
-                text = "點位 #$num  →  連點 ${pt.clickCount} 次 (間隔下點 ${pt.delayAfterMs}ms)"
+                text = "📍 點位 #$num  →  連點 ${pt.clickCount} 次"
                 setTextColor(Color.WHITE)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+                typeface = Typeface.DEFAULT_BOLD
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             }
 
@@ -548,10 +575,49 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
                 refreshStatusAndPointsUi()
             }
 
-            row.addView(tvLabel)
-            row.addView(btnMinus)
-            row.addView(btnPlus)
-            pointsContainer.addView(row)
+            rowTop.addView(tvLabel)
+            rowTop.addView(btnMinus)
+            rowTop.addView(btnPlus)
+            cardItem.addView(rowTop)
+
+            val rowBottom = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(6f), 0, 0)
+            }
+
+            val isPageJump = pt.delayAfterMs >= 600L
+            val jumpTag = if (isPageJump) " [⏳跳頁等待]" else ""
+            val tvDelayDesc = TextView(this).apply {
+                text = "點完後等待: ${pt.delayAfterMs}ms$jumpTag"
+                setTextColor(if (isPageJump) Color.parseColor("#38BDF8") else Color.parseColor("#94A3B8"))
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+
+            val btnDelay200 = createSmallBtn("200ms", if (pt.delayAfterMs == 200L) "#0284C7" else "#1E293B") {
+                pt.delayAfterMs = 200L
+                ClickerPrefs.savePoints(this)
+                refreshStatusAndPointsUi()
+            }
+            val btnDelay800 = createSmallBtn("800ms(跳頁)", if (pt.delayAfterMs == 800L) "#0284C7" else "#1E293B") {
+                pt.delayAfterMs = 800L
+                ClickerPrefs.savePoints(this)
+                refreshStatusAndPointsUi()
+            }
+            val btnDelay1500 = createSmallBtn("1.5秒", if (pt.delayAfterMs == 1500L) "#0284C7" else "#1E293B") {
+                pt.delayAfterMs = 1500L
+                ClickerPrefs.savePoints(this)
+                refreshStatusAndPointsUi()
+            }
+
+            rowBottom.addView(tvDelayDesc)
+            rowBottom.addView(btnDelay200)
+            rowBottom.addView(btnDelay800)
+            rowBottom.addView(btnDelay1500)
+            cardItem.addView(rowBottom)
+
+            pointsContainer.addView(cardItem)
         }
     }
 
@@ -648,18 +714,18 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
         return Button(this).apply {
             text = textStr
             setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             minWidth = 0
             minimumWidth = 0
             minHeight = 0
             minimumHeight = 0
-            setPadding(dp(8f), dp(6f), dp(8f), dp(6f))
+            setPadding(dp(7f), dp(5f), dp(7f), dp(5f))
             background = rounded(bgHex, 6f)
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
-                marginEnd = dp(6f)
+                marginEnd = dp(4f)
             }
             setOnClickListener { onClick() }
         }
