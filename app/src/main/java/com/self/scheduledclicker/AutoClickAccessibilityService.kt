@@ -735,6 +735,7 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
             val centerX: Float,
             val centerY: Float,
             val clickCount: Int,
+            val intervalMs: Long,
             val delayAfterMs: Long
         )
 
@@ -761,6 +762,7 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
                     centerX = cx,
                     centerY = cy,
                     clickCount = h.config.clickCount.coerceAtLeast(1),
+                    intervalMs = h.config.intervalMs.coerceAtLeast(10L),
                     delayAfterMs = h.config.delayAfterMs.coerceAtLeast(20L)
                 )
             )
@@ -796,8 +798,8 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
             }
 
             val target = targets[targetIdx]
-            // duration 改為 55ms，最符合真實手指點選時長，相容各電商平台防抖與防作弊
-            performTapAt(target.centerX, target.centerY, durationMs = 55L) {
+            val pressDuration = ClickerPrefs.pressDurationMs.coerceIn(20L, 500L)
+            performTapAt(target.centerX, target.centerY, durationMs = pressDuration) {
                 if (token != clickSequenceToken || currentState != EngineState.CLICKING) {
                     restoreMarkersToOriginalPositions()
                     return@performTapAt
@@ -807,7 +809,7 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
                 if (nextClickIdx < target.clickCount) {
                     mainHandler.postDelayed({
                         runStep(cycleIdx, targetIdx, nextClickIdx)
-                    }, samePointInterval)
+                    }, target.intervalMs)
                 } else {
                     val nextTargetIdx = targetIdx + 1
                     if (nextTargetIdx < targets.size) {

@@ -3,6 +3,7 @@ package com.self.scheduledclicker
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
+import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -277,6 +278,52 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
         quickTimeRow.addView(btnNtpSync)
         cardTime.addView(quickTimeRow)
 
+        val tvAdvanceDesc = TextView(this).apply {
+            text = "🚀 搶購提前發動（抵消網路延遲與伺服器RTT）：目前提前 ${ClickerPrefs.advanceOffsetMs}ms\n實際發動時刻：${ClickerPrefs.formatActualTriggerTimeString()}"
+            setTextColor(Color.parseColor("#F59E0B"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setPadding(0, dp(4f), 0, dp(4f))
+        }
+        cardTime.addView(tvAdvanceDesc)
+
+        val advanceBtnRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(2f), 0, dp(8f))
+        }
+        val btnAdv0 = createSmallBtn("0ms(準點)", if (ClickerPrefs.advanceOffsetMs == 0L) "#0284C7" else "#1E293B") {
+            ClickerPrefs.setAdvanceOffsetMs(this, 0L)
+            refreshStatusAndPointsUi()
+        }
+        val btnAdv50 = createSmallBtn("50ms", if (ClickerPrefs.advanceOffsetMs == 50L) "#0284C7" else "#1E293B") {
+            ClickerPrefs.setAdvanceOffsetMs(this, 50L)
+            refreshStatusAndPointsUi()
+        }
+        val btnAdv100 = createSmallBtn("100ms", if (ClickerPrefs.advanceOffsetMs == 100L) "#0284C7" else "#1E293B") {
+            ClickerPrefs.setAdvanceOffsetMs(this, 100L)
+            refreshStatusAndPointsUi()
+        }
+        val btnAdv150 = createSmallBtn("150ms(推薦)", if (ClickerPrefs.advanceOffsetMs == 150L) "#059669" else "#1E293B") {
+            ClickerPrefs.setAdvanceOffsetMs(this, 150L)
+            refreshStatusAndPointsUi()
+        }
+        val btnAdv200 = createSmallBtn("200ms", if (ClickerPrefs.advanceOffsetMs == 200L) "#0284C7" else "#1E293B") {
+            ClickerPrefs.setAdvanceOffsetMs(this, 200L)
+            refreshStatusAndPointsUi()
+        }
+        val btnAdvCustom = createSmallBtn("✏️自訂", "#334155") {
+            showNumberInputDialog("設定搶購提前量", ClickerPrefs.advanceOffsetMs, 0L, 3000L, "ms") { v ->
+                ClickerPrefs.setAdvanceOffsetMs(this, v)
+                refreshStatusAndPointsUi()
+            }
+        }
+        advanceBtnRow.addView(btnAdv0)
+        advanceBtnRow.addView(btnAdv50)
+        advanceBtnRow.addView(btnAdv100)
+        advanceBtnRow.addView(btnAdv150)
+        advanceBtnRow.addView(btnAdv200)
+        advanceBtnRow.addView(btnAdvCustom)
+        cardTime.addView(advanceBtnRow)
+
         val btnSaveTime = createActionButton("💾 儲存觸發時間設定", "#38BDF8", Color.parseColor("#0F172A")) {
             saveTimeAndSequenceSettings(showToast = true, updateMarkersIfShowing = true)
         }
@@ -389,7 +436,7 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
         etSameInterval.setText(ClickerPrefs.samePointIntervalMs.toString())
         etNextDelay.setText(ClickerPrefs.nextPointDelayMs.toString())
         swStealthMode.isChecked = ClickerPrefs.isStealthMode
-        tvTargetSummary.text = "目前設定觸發時刻：${ClickerPrefs.formatTargetTimeString()}"
+        tvTargetSummary.text = "設定時刻：${ClickerPrefs.formatTargetTimeString()}  →  實際發動：${ClickerPrefs.formatActualTriggerTimeString()}"
     }
 
     private fun saveTimeAndSequenceSettings(showToast: Boolean, updateMarkersIfShowing: Boolean) {
@@ -525,7 +572,7 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
             "📱 目前使用手機系統時間（可點下方按鈕同步 NTP 標準時間）"
         }
 
-        tvTargetSummary.text = "目前設定觸發時刻：${ClickerPrefs.formatTargetTimeString()}"
+        tvTargetSummary.text = "設定時刻：${ClickerPrefs.formatTargetTimeString()}  →  實際發動：${ClickerPrefs.formatActualTriggerTimeString()}"
 
         // 更新點位微調清單（含次數與跳頁等待延遲）
         pointsContainer.removeAllViews()
@@ -545,6 +592,7 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
                 layoutParams = lp
             }
 
+            // 1. 第一行：點位編號 + 連點次數 + 次數調整按鈕
             val rowTop = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -558,7 +606,7 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             }
 
-            val btnMinus = createSmallBtn("-1次", "#334155") {
+            val btnMinus = createSmallBtn("-1", "#334155") {
                 pt.clickCount = (pt.clickCount - 1).coerceAtLeast(1)
                 ClickerPrefs.savePoints(this)
                 if (AutoClickAccessibilityService.isOverlayShowing) {
@@ -566,7 +614,7 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
                 }
                 refreshStatusAndPointsUi()
             }
-            val btnPlus = createSmallBtn("+1次", "#334155") {
+            val btnPlus = createSmallBtn("+1", "#334155") {
                 pt.clickCount = (pt.clickCount + 1).coerceAtMost(999)
                 ClickerPrefs.savePoints(this)
                 if (AutoClickAccessibilityService.isOverlayShowing) {
@@ -574,12 +622,65 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
                 }
                 refreshStatusAndPointsUi()
             }
+            val btnCustomCount = createSmallBtn("✏️次數", "#334155") {
+                showNumberInputDialog("設定點位 #$num 連點次數", pt.clickCount.toLong(), 1L, 999L, "次") { v ->
+                    pt.clickCount = v.toInt()
+                    ClickerPrefs.savePoints(this)
+                    if (AutoClickAccessibilityService.isOverlayShowing) {
+                        AutoClickAccessibilityService.instance?.rebuildTargetMarkers()
+                    }
+                    refreshStatusAndPointsUi()
+                }
+            }
 
             rowTop.addView(tvLabel)
             rowTop.addView(btnMinus)
             rowTop.addView(btnPlus)
+            rowTop.addView(btnCustomCount)
             cardItem.addView(rowTop)
 
+            // 2. 第二行：每一次點擊之間的間隔 (連點間隔 intervalMs)
+            val rowInterval = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(6f), 0, 0)
+            }
+            val tvIntervalDesc = TextView(this).apply {
+                text = "每次點擊間隔: ${pt.intervalMs}ms"
+                setTextColor(Color.parseColor("#F59E0B"))
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val btnInt35 = createSmallBtn("35ms", if (pt.intervalMs == 35L) "#0284C7" else "#1E293B") {
+                pt.intervalMs = 35L
+                ClickerPrefs.savePoints(this)
+                refreshStatusAndPointsUi()
+            }
+            val btnInt65 = createSmallBtn("65ms(推薦)", if (pt.intervalMs == 65L) "#059669" else "#1E293B") {
+                pt.intervalMs = 65L
+                ClickerPrefs.savePoints(this)
+                refreshStatusAndPointsUi()
+            }
+            val btnInt100 = createSmallBtn("100ms", if (pt.intervalMs == 100L) "#0284C7" else "#1E293B") {
+                pt.intervalMs = 100L
+                ClickerPrefs.savePoints(this)
+                refreshStatusAndPointsUi()
+            }
+            val btnIntCustom = createSmallBtn("✏️自訂", "#334155") {
+                showNumberInputDialog("設定點位 #$num 每次點擊間隔", pt.intervalMs, 10L, 3000L, "ms") { v ->
+                    pt.intervalMs = v
+                    ClickerPrefs.savePoints(this)
+                    refreshStatusAndPointsUi()
+                }
+            }
+            rowInterval.addView(tvIntervalDesc)
+            rowInterval.addView(btnInt35)
+            rowInterval.addView(btnInt65)
+            rowInterval.addView(btnInt100)
+            rowInterval.addView(btnIntCustom)
+            cardItem.addView(rowInterval)
+
+            // 3. 第三行：點完此點後等待時間 (換點 / 跳頁延遲 delayAfterMs)
             val rowBottom = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -595,32 +696,40 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             }
 
-            val btnDelay300 = createSmallBtn("300ms", if (pt.delayAfterMs <= 400L) "#0284C7" else "#1E293B") {
+            val btnDelay100 = createSmallBtn("100ms", if (pt.delayAfterMs == 100L) "#0284C7" else "#1E293B") {
+                pt.delayAfterMs = 100L
+                ClickerPrefs.savePoints(this)
+                refreshStatusAndPointsUi()
+            }
+            val btnDelay300 = createSmallBtn("300ms", if (pt.delayAfterMs == 300L) "#0284C7" else "#1E293B") {
                 pt.delayAfterMs = 300L
                 ClickerPrefs.savePoints(this)
                 refreshStatusAndPointsUi()
             }
-            val btnDelay1200 = createSmallBtn("1.2秒", if (pt.delayAfterMs == 1200L) "#0284C7" else "#1E293B") {
-                pt.delayAfterMs = 1200L
+            val btnDelay800 = createSmallBtn("800ms", if (pt.delayAfterMs == 800L) "#0284C7" else "#1E293B") {
+                pt.delayAfterMs = 800L
                 ClickerPrefs.savePoints(this)
                 refreshStatusAndPointsUi()
             }
-            val btnDelay1800 = createSmallBtn("1.8秒(推薦跳頁)", if (pt.delayAfterMs == 1800L) "#059669" else "#1E293B") {
+            val btnDelay1800 = createSmallBtn("1.8秒(跳頁)", if (pt.delayAfterMs == 1800L) "#059669" else "#1E293B") {
                 pt.delayAfterMs = 1800L
                 ClickerPrefs.savePoints(this)
                 refreshStatusAndPointsUi()
             }
-            val btnDelay2500 = createSmallBtn("2.5秒", if (pt.delayAfterMs == 2500L) "#0284C7" else "#1E293B") {
-                pt.delayAfterMs = 2500L
-                ClickerPrefs.savePoints(this)
-                refreshStatusAndPointsUi()
+            val btnDelayCustom = createSmallBtn("✏️自訂", "#334155") {
+                showNumberInputDialog("設定點位 #$num 點完後等待時間", pt.delayAfterMs, 20L, 10000L, "ms") { v ->
+                    pt.delayAfterMs = v
+                    ClickerPrefs.savePoints(this)
+                    refreshStatusAndPointsUi()
+                }
             }
 
             rowBottom.addView(tvDelayDesc)
+            rowBottom.addView(btnDelay100)
             rowBottom.addView(btnDelay300)
-            rowBottom.addView(btnDelay1200)
+            rowBottom.addView(btnDelay800)
             rowBottom.addView(btnDelay1800)
-            rowBottom.addView(btnDelay2500)
+            rowBottom.addView(btnDelayCustom)
             cardItem.addView(rowBottom)
 
             pointsContainer.addView(cardItem)
@@ -639,6 +748,39 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
                 )
             }
         }
+    }
+
+    private fun showNumberInputDialog(
+        title: String,
+        currentValue: Long,
+        minVal: Long,
+        maxVal: Long,
+        unit: String,
+        onConfirmed: (Long) -> Unit
+    ) {
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setText(currentValue.toString())
+            setSelectAllOnFocus(true)
+            setPadding(dp(16f), dp(12f), dp(16f), dp(12f))
+            setTextColor(Color.WHITE)
+            setBackground(rounded("#1E293B", 8f, "#475569"))
+        }
+        val container = LinearLayout(this).apply {
+            setPadding(dp(20f), dp(10f), dp(20f), dp(10f))
+            addView(input)
+        }
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage("請輸入數值 ($minVal ~ $maxVal $unit)：")
+            .setView(container)
+            .setPositiveButton("確定") { _, _ ->
+                val v = input.text.toString().toLongOrNull() ?: currentValue
+                val clamped = v.coerceIn(minVal, maxVal)
+                onConfirmed(clamped)
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     private fun createCard(): LinearLayout {

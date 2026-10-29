@@ -18,7 +18,8 @@ data class TargetPointConfig(
     var x: Int,
     var y: Int,
     var clickCount: Int = 1,
-    var delayAfterMs: Long = 200L
+    var delayAfterMs: Long = 300L,
+    var intervalMs: Long = 65L // 每次點擊之間的時間間隔（毫秒）
 )
 
 /**
@@ -80,6 +81,14 @@ object ClickerPrefs {
         private set
     var isStealthMode: Boolean = true // 預設開啟防遮蔽模式，突破蝦皮等防點擊劫持
         private set
+    var advanceOffsetMs: Long = 0L // 搶購提前量（毫秒偏移，例如提前 150ms 抵消網路延遲）
+        private set
+    var pressDurationMs: Long = 55L // 單次觸摸停留時長（毫秒）
+        private set
+    var advanceOffsetMs: Long = 0L // 搶購提前量（毫秒偏移，例如提前 150ms 抵消網路延遲）
+        private set
+    var pressDurationMs: Long = 55L // 單次觸摸停留時長（毫秒）
+        private set
 
     val points: MutableList<TargetPointConfig> = mutableListOf()
 
@@ -99,6 +108,10 @@ object ClickerPrefs {
         samePointIntervalMs = p.getLong(KEY_SAME_POINT_INTERVAL_MS, 65L).coerceIn(20L, 5000L)
         nextPointDelayMs = p.getLong(KEY_NEXT_POINT_DELAY_MS, 300L).coerceIn(20L, 10000L)
         isStealthMode = p.getBoolean(KEY_STEALTH_MODE, true)
+        advanceOffsetMs = p.getLong(KEY_ADVANCE_OFFSET_MS, 0L).coerceIn(0L, 5000L)
+        pressDurationMs = p.getLong(KEY_PRESS_DURATION_MS, 55L).coerceIn(20L, 500L)
+        advanceOffsetMs = p.getLong(KEY_ADVANCE_OFFSET_MS, 0L).coerceIn(0L, 5000L)
+        pressDurationMs = p.getLong(KEY_PRESS_DURATION_MS, 55L).coerceIn(20L, 500L)
 
         loadPoints(context)
     }
@@ -116,7 +129,8 @@ object ClickerPrefs {
                             x = obj.optInt("x", 300),
                             y = obj.optInt("y", 400 + i * 130),
                             clickCount = obj.optInt("clickCount", defaultClicksPerPoint).coerceIn(1, 999),
-                            delayAfterMs = obj.optLong("delayAfterMs", nextPointDelayMs).coerceIn(20L, 10000L)
+                            delayAfterMs = obj.optLong("delayAfterMs", nextPointDelayMs).coerceIn(20L, 10000L),
+                            intervalMs = obj.optLong("intervalMs", samePointIntervalMs).coerceIn(10L, 5000L)
                         )
                     )
                 }
@@ -140,6 +154,8 @@ object ClickerPrefs {
                 put("y", pt.y)
                 put("clickCount", pt.clickCount)
                 put("delayAfterMs", pt.delayAfterMs)
+                put("intervalMs", pt.intervalMs)
+                put("intervalMs", pt.intervalMs)
             }
             arr.put(obj)
         }
@@ -215,6 +231,42 @@ object ClickerPrefs {
         prefs(context).edit().putBoolean(KEY_STEALTH_MODE, enabled).apply()
     }
 
+    fun setAdvanceOffsetMs(context: Context, offsetMs: Long) {
+        advanceOffsetMs = offsetMs.coerceIn(0L, 5000L)
+        prefs(context).edit().putLong(KEY_ADVANCE_OFFSET_MS, advanceOffsetMs).apply()
+    }
+
+    fun setPressDurationMs(context: Context, durationMs: Long) {
+        pressDurationMs = durationMs.coerceIn(20L, 500L)
+        prefs(context).edit().putLong(KEY_PRESS_DURATION_MS, pressDurationMs).apply()
+    }
+
+    fun formatActualTriggerTimeString(): String {
+        val nextMs = computeNextTriggerEpochMs()
+        val cal = Calendar.getInstance().apply { timeInMillis = nextMs }
+        val deci = (cal.get(Calendar.MILLISECOND) / 100)
+        val base = String.format("%02d:%02d:%02d.%d", cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE), cal.get(Calendar.SECOND), deci)
+        return if (advanceOffsetMs > 0L) "$base (提前${advanceOffsetMs}ms)" else base
+    }
+
+    fun setAdvanceOffsetMs(context: Context, offsetMs: Long) {
+        advanceOffsetMs = offsetMs.coerceIn(0L, 5000L)
+        prefs(context).edit().putLong(KEY_ADVANCE_OFFSET_MS, advanceOffsetMs).apply()
+    }
+
+    fun setPressDurationMs(context: Context, durationMs: Long) {
+        pressDurationMs = durationMs.coerceIn(20L, 500L)
+        prefs(context).edit().putLong(KEY_PRESS_DURATION_MS, pressDurationMs).apply()
+    }
+
+    fun formatActualTriggerTimeString(): String {
+        val nextMs = computeNextTriggerEpochMs()
+        val cal = Calendar.getInstance().apply { timeInMillis = nextMs }
+        val deci = (cal.get(Calendar.MILLISECOND) / 100)
+        val base = String.format("%02d:%02d:%02d.%d", cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE), cal.get(Calendar.SECOND), deci)
+        return if (advanceOffsetMs > 0L) "$base (提前${advanceOffsetMs}ms)" else base
+    }
+
     fun savePanelPosition(context: Context, x: Int, y: Int) {
         prefs(context).edit()
             .putInt(KEY_PANEL_X, x)
@@ -254,10 +306,10 @@ object ClickerPrefs {
             set(Calendar.SECOND, targetSecond)
             set(Calendar.MILLISECOND, targetDeciSecond * 100)
         }
-        var targetMs = cal.timeInMillis
+        var targetMs = cal.timeInMillis - advanceOffsetMs
         if (targetMs < nowMs - 500L) {
             cal.add(Calendar.DAY_OF_YEAR, 1)
-            targetMs = cal.timeInMillis
+            targetMs = cal.timeInMillis - advanceOffsetMs
         }
         return targetMs
     }
