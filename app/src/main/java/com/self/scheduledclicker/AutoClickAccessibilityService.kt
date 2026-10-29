@@ -14,6 +14,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.Rect
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -28,6 +29,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -366,7 +368,7 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
         controlPanelParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
@@ -466,7 +468,7 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
                 val params = WindowManager.LayoutParams(
                     sizePx,
                     sizePx,
-                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                     flags,
                     PixelFormat.TRANSLUCENT
                 ).apply {
@@ -583,28 +585,64 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
      * 防遮蔽關鍵功能：將所有準星暫時移出螢幕可視區域
      * 讓蝦皮等含有 filterTouchesWhenObscured 的敏感按鈕上方 100% 毫無遮擋！
      */
+    /**
+     * 防遮蔽極致模式：
+     * 1. 使用 TYPE_ACCESSIBILITY_OVERLAY（受信任無障礙視窗）
+     * 2. 在點擊期間將控制面板與所有準星移出可視區並設為 GONE / 寬高 0，
+     *    讓螢幕處於完全無遮擋狀態，徹底避開蝦皮 filterTouchesWhenObscured！
+     */
     private fun moveMarkersOffScreenForStealth() {
+        val wm = windowManager ?: return
         for (h in markerHolders) {
+            h.view.visibility = View.GONE
             h.params.x = -10000
             h.params.y = -10000
+            h.params.width = 0
+            h.params.height = 0
             try {
-                windowManager.updateViewLayout(h.view, h.params)
-            } catch (_: Exception) {
-            }
+                wm.updateViewLayout(h.view, h.params)
+            } catch (_: Exception) {}
+        }
+        val panel = controlPanelView
+        if (panel != null) {
+            panel.visibility = View.GONE
+            controlPanelParams.x = -10000
+            controlPanelParams.y = -10000
+            controlPanelParams.width = 0
+            controlPanelParams.height = 0
+            try {
+                wm.updateViewLayout(panel, controlPanelParams)
+            } catch (_: Exception) {}
         }
     }
 
     /**
-     * 點擊結束後將所有準星還原至原本設定的位置
+     * 點擊結束後將控制面板與準星恢復至原本設定的位置與尺寸
      */
     private fun restoreMarkersToOriginalPositions() {
+        val wm = windowManager ?: return
+        val sizePx = dp(46f)
         for (h in markerHolders) {
+            h.view.visibility = View.VISIBLE
             h.params.x = h.config.x
             h.params.y = h.config.y
+            h.params.width = sizePx
+            h.params.height = sizePx
             try {
-                windowManager.updateViewLayout(h.view, h.params)
-            } catch (_: Exception) {
-            }
+                wm.updateViewLayout(h.view, h.params)
+            } catch (_: Exception) {}
+        }
+        val panel = controlPanelView
+        if (panel != null) {
+            panel.visibility = View.VISIBLE
+            val (savedX, savedY) = ClickerPrefs.loadPanelPosition(this)
+            controlPanelParams.x = savedX
+            controlPanelParams.y = savedY
+            controlPanelParams.width = WindowManager.LayoutParams.WRAP_CONTENT
+            controlPanelParams.height = WindowManager.LayoutParams.WRAP_CONTENT
+            try {
+                wm.updateViewLayout(panel, controlPanelParams)
+            } catch (_: Exception) {}
         }
     }
 
@@ -789,9 +827,18 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
         runStep(0, 0, 0)
     }
 
-    private fun performTapAt(screenX: Float, screenY: Float, durationMs: Long = 55L, onComplete: () -> Unit) {
+    /**
+     * 雙管齊下穿透點擊：
+     * 1. 嘗試使用無障礙語意節點點擊（ACTION_CLICK）直接觸發 View 的點擊事件（不受任何 Tapjacking 防護阻擋）
+     * 2. 同步派發微位移手勢（moveTo + lineTo），產生完整 DOWN -> MOVE -> UP 觸控生命週期
+     */
+    private fun performTapAt(screenX: Float, screenY: Float, durationMs: Long = 60L, onComplete: () -> Unit) {
+        // 先嘗試節點直點（穿透防護）
+        tryPerformNodeClickAt(screenX, screenY)
+
         val path = Path().apply {
             moveTo(screenX, screenY)
+            lineTo(screenX, screenY + 1f) // 微小移動 1px，避免某些 View 將單點視為無效觸控
         }
         val stroke = GestureDescription.StrokeDescription(path, 0L, durationMs)
         val gesture = GestureDescription.Builder().addStroke(stroke).build()
@@ -801,12 +848,47 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
             }
 
             override fun onCancelled(gestureDescription: GestureDescription?) {
-                // 如果在換頁瞬間手勢被系統 cancel，短暫延遲 80ms 後接續，避免整個序列崩潰
                 mainHandler.postDelayed({ onComplete() }, 80L)
             }
         }, null)
         if (!ok) {
             mainHandler.postDelayed({ onComplete() }, 80L)
+        }
+    }
+
+    private fun tryPerformNodeClickAt(screenX: Float, screenY: Float): Boolean {
+        return try {
+            val root = rootInActiveWindow ?: return false
+            val x = screenX.toInt()
+            val y = screenY.toInt()
+            val targetRect = Rect()
+
+            fun findClickableNode(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+                if (node == null) return null
+                node.getBoundsInScreen(targetRect)
+                if (!targetRect.contains(x, y)) {
+                    return null
+                }
+                val count = node.childCount
+                for (i in count - 1 downTo 0) {
+                    val child = node.getChild(i)
+                    val found = findClickableNode(child)
+                    if (found != null) return found
+                }
+                if (node.isClickable) {
+                    return node
+                }
+                return null
+            }
+
+            val targetNode = findClickableNode(root)
+            if (targetNode != null) {
+                targetNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            } else {
+                false
+            }
+        } catch (_: Exception) {
+            false
         }
     }
 
