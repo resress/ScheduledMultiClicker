@@ -923,9 +923,6 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
         } catch (_: Exception) {
             false
         }
-    } catch (_: Exception) {
-            false
-        }
     }
 
     private fun broadcastState() {
