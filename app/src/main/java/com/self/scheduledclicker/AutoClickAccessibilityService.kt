@@ -635,7 +635,8 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
         val panel = controlPanelView
         if (panel != null) {
             panel.visibility = View.VISIBLE
-            val (savedX, savedY) = ClickerPrefs.loadPanelPosition(this)
+            val savedX = ClickerPrefs.getPanelX(this)
+            val savedY = ClickerPrefs.getPanelY(this)
             controlPanelParams.x = savedX
             controlPanelParams.y = savedY
             controlPanelParams.width = WindowManager.LayoutParams.WRAP_CONTENT
