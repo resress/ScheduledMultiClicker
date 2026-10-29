@@ -857,12 +857,44 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
         }
     }
 
+        /**
+     * 智能無障礙節點點擊：
+     * 嚴格過濾節點，排除全螢幕容器與對話框半透明遮罩，避免誤觸 cancelOnTouchOutside 造成跳頁失敗！
+     */
     private fun tryPerformNodeClickAt(screenX: Float, screenY: Float): Boolean {
         return try {
             val root = rootInActiveWindow ?: return false
             val x = screenX.toInt()
             val y = screenY.toInt()
             val targetRect = Rect()
+            val displayMetrics = resources.displayMetrics
+            val screenW = displayMetrics.widthPixels
+            val screenH = displayMetrics.heightPixels
+
+            fun isLikelyRealButton(node: AccessibilityNodeInfo): Boolean {
+                if (!node.isClickable) return false
+                node.getBoundsInScreen(targetRect)
+                val w = targetRect.width()
+                val h = targetRect.height()
+
+                // 排除全螢幕大容器或半透明背景遮罩（避免誤觸 cancelOnTouchOutside 導致跳頁中斷退回原畫面）
+                if (w >= screenW * 0.82f && h >= screenH * 0.35f) return false
+                if (w <= 0 || h <= 0) return false
+
+                val cls = node.className?.toString() ?: ""
+                val text = node.text?.toString() ?: ""
+                val desc = node.contentDescription?.toString() ?: ""
+
+                val isButtonClass = cls.contains("Button", ignoreCase = true) ||
+                        cls.contains("TextView", ignoreCase = true) ||
+                        cls.contains("ImageView", ignoreCase = true) ||
+                        cls.contains("CheckBox", ignoreCase = true) ||
+                        cls.contains("RadioButton", ignoreCase = true)
+                val hasText = text.isNotBlank() || desc.isNotBlank()
+                val isReasonableSize = w <= screenW * 0.85f && h <= dp(130f)
+
+                return isButtonClass || hasText || isReasonableSize
+            }
 
             fun findClickableNode(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
                 if (node == null) return null
@@ -876,7 +908,7 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
                     val found = findClickableNode(child)
                     if (found != null) return found
                 }
-                if (node.isClickable) {
+                if (isLikelyRealButton(node)) {
                     return node
                 }
                 return null
@@ -889,6 +921,9 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
                 false
             }
         } catch (_: Exception) {
+            false
+        }
+    } catch (_: Exception) {
             false
         }
     }

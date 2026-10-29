@@ -595,26 +595,32 @@ class MainActivity : AppCompatActivity(), Choreographer.FrameCallback {
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             }
 
-            val btnDelay200 = createSmallBtn("200ms", if (pt.delayAfterMs == 200L) "#0284C7" else "#1E293B") {
-                pt.delayAfterMs = 200L
+            val btnDelay300 = createSmallBtn("300ms", if (pt.delayAfterMs <= 400L) "#0284C7" else "#1E293B") {
+                pt.delayAfterMs = 300L
                 ClickerPrefs.savePoints(this)
                 refreshStatusAndPointsUi()
             }
-            val btnDelay800 = createSmallBtn("800ms(跳頁)", if (pt.delayAfterMs == 800L) "#0284C7" else "#1E293B") {
-                pt.delayAfterMs = 800L
+            val btnDelay1200 = createSmallBtn("1.2秒", if (pt.delayAfterMs == 1200L) "#0284C7" else "#1E293B") {
+                pt.delayAfterMs = 1200L
                 ClickerPrefs.savePoints(this)
                 refreshStatusAndPointsUi()
             }
-            val btnDelay1500 = createSmallBtn("1.5秒", if (pt.delayAfterMs == 1500L) "#0284C7" else "#1E293B") {
-                pt.delayAfterMs = 1500L
+            val btnDelay1800 = createSmallBtn("1.8秒(推薦跳頁)", if (pt.delayAfterMs == 1800L) "#059669" else "#1E293B") {
+                pt.delayAfterMs = 1800L
+                ClickerPrefs.savePoints(this)
+                refreshStatusAndPointsUi()
+            }
+            val btnDelay2500 = createSmallBtn("2.5秒", if (pt.delayAfterMs == 2500L) "#0284C7" else "#1E293B") {
+                pt.delayAfterMs = 2500L
                 ClickerPrefs.savePoints(this)
                 refreshStatusAndPointsUi()
             }
 
             rowBottom.addView(tvDelayDesc)
-            rowBottom.addView(btnDelay200)
-            rowBottom.addView(btnDelay800)
-            rowBottom.addView(btnDelay1500)
+            rowBottom.addView(btnDelay300)
+            rowBottom.addView(btnDelay1200)
+            rowBottom.addView(btnDelay1800)
+            rowBottom.addView(btnDelay2500)
             cardItem.addView(rowBottom)
 
             pointsContainer.addView(cardItem)
