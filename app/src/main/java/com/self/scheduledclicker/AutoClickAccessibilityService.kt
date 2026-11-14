@@ -19,6 +19,7 @@ import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.util.Log
 import android.os.Handler
 import android.os.Looper
 import android.os.VibrationEffect
@@ -854,30 +855,59 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
      *    徹底杜絕多餘滑動像素被蝦皮結帳自繪元件（Flutter / Canvas）誤判為手勢滾動！
      * 3. 同步嘗試無障礙語意點擊，雙重保險！
      */
-    private fun performTapAt(screenX: Float, screenY: Float, durationMs: Long = 60L, onComplete: () -> Unit) {
-        // 發射點擊微震動
+    private fun performTapAt(
+        screenX: Float,
+        screenY: Float,
+        durationMs: Long = 60L,
+        onComplete: () -> Unit
+    ) {
         triggerHapticFeedback()
 
-        // 嘗試語意節點點擊（輔助）
-        tryPerformNodeClickAt(screenX, screenY)
-
-        // 原地真實手勢點擊（核心主幹）
-        val path = Path().apply {
-            moveTo(screenX, screenY) // 純粹原地落點，絕不加多餘滑動偏移
+        // 異步嘗試語意點擊，不阻礙主線程手勢
+        mainHandler.post {
+            tryPerformNodeClickAt(screenX, screenY)
         }
-        val stroke = GestureDescription.StrokeDescription(path, 0L, durationMs.coerceIn(30L, 200L))
+
+        val clampedDuration = durationMs.coerceIn(40L, 200L)
+        val path = Path().apply {
+            moveTo(screenX, screenY)
+            // 關鍵修復：在 Android 原始碼中，StrokeDescription 需要路徑具有長度，
+            // 若只有 moveTo，跳頁瞬間系統會視為 INVALID 手勢並直接丟棄回呼！
+            lineTo(screenX, screenY + 0.1f)
+        }
+
+        val stroke = GestureDescription.StrokeDescription(path, 0L, clampedDuration)
         val gesture = GestureDescription.Builder().addStroke(stroke).build()
+
+        var hasFinished = false
+        fun finishOnce(reason: String) {
+            if (!hasFinished) {
+                hasFinished = true
+                Log.d("ClickerEngine", "performTapAt finish: $reason at ($screenX, $screenY)")
+                onComplete()
+            }
+        }
+
+        // 看門狗：超時強制推進，杜絕任何轉場造成的永久卡死
+        val watchdogTimeout = clampedDuration + 120L
+        mainHandler.postDelayed({
+            finishOnce("WatchdogTimeout")
+        }, watchdogTimeout)
+
         val ok = dispatchGesture(gesture, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
-                mainHandler.post { onComplete() }
+                mainHandler.post { finishOnce("GestureCompleted") }
             }
 
             override fun onCancelled(gestureDescription: GestureDescription?) {
-                mainHandler.postDelayed({ onComplete() }, 80L)
+                // 跳頁時系統常發出 onCancelled，此處立即延遲 40ms 推進，絕不中斷隊列！
+                mainHandler.postDelayed({ finishOnce("GestureCancelled") }, 40L)
             }
         }, null)
+
         if (!ok) {
-            mainHandler.postDelayed({ onComplete() }, 80L)
+            Log.w("ClickerEngine", "dispatchGesture returned false, forcing advance")
+            mainHandler.postDelayed({ finishOnce("DispatchFailed") }, 40L)
         }
     }
 
