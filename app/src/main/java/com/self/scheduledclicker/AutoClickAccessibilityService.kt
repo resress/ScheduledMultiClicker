@@ -586,65 +586,74 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
      * 讓蝦皮等含有 filterTouchesWhenObscured 的敏感按鈕上方 100% 毫無遮擋！
      */
     /**
-     * 防遮蔽極致模式：
-     * 1. 使用 TYPE_ACCESSIBILITY_OVERLAY（受信任無障礙視窗）
-     * 2. 在點擊期間將控制面板與所有準星移出可視區並設為 GONE / 寬高 0，
-     *    讓螢幕處於完全無遮擋狀態，徹底避開蝦皮 filterTouchesWhenObscured！
+     * 防遮蔽終極模式（真正的 0 懸浮圖層）：
+     * Android 系統的 filterTouchesWhenObscured 會檢查全域 WindowManager 是否有任何 Overlay。
+     * 若只是設為 GONE 或移到螢幕外，WindowManager 中依舊註冊了視窗，蝦皮結帳等敏感按鈕依然會丟棄點擊！
+     * 因此在連點期間，直接徹底從 WindowManager 移除所有懸浮視窗（準星與控制面板），
+     * 讓螢幕達到真正的「純淨原生狀態」，100% 避開 FLAG_WINDOW_IS_OBSCURED 與 FLAG_WINDOW_IS_PARTIALLY_OBSCURED！
      */
+    private var isStealthHidden = false
+
     private fun moveMarkersOffScreenForStealth() {
-        val wm = windowManager ?: return
+        if (isStealthHidden) return
+        isStealthHidden = true
+        // 暫時卸載所有準星
         for (h in markerHolders) {
-            h.view.visibility = View.GONE
-            h.params.x = -10000
-            h.params.y = -10000
-            h.params.width = 0
-            h.params.height = 0
             try {
-                wm.updateViewLayout(h.view, h.params)
+                windowManager.removeView(h.view)
             } catch (_: Exception) {}
         }
+        // 暫時卸載控制面板
         val panel = controlPanelView
         if (panel != null) {
-            panel.visibility = View.GONE
-            controlPanelParams.x = -10000
-            controlPanelParams.y = -10000
-            controlPanelParams.width = 0
-            controlPanelParams.height = 0
             try {
-                wm.updateViewLayout(panel, controlPanelParams)
+                windowManager.removeView(panel)
             } catch (_: Exception) {}
         }
     }
 
     /**
-     * 點擊結束後將控制面板與準星恢復至原本設定的位置與尺寸
+     * 點擊結束後重新加載控制面板與準星至原位
      */
     private fun restoreMarkersToOriginalPositions() {
-        val wm = windowManager ?: return
-        val sizePx = dp(46f)
+        if (!isStealthHidden) return
+        isStealthHidden = false
+        // 重新加載準星
         for (h in markerHolders) {
-            h.view.visibility = View.VISIBLE
-            h.params.x = h.config.x
-            h.params.y = h.config.y
-            h.params.width = sizePx
-            h.params.height = sizePx
             try {
-                wm.updateViewLayout(h.view, h.params)
+                windowManager.addView(h.view, h.params)
             } catch (_: Exception) {}
         }
+        // 重新加載控制面板
         val panel = controlPanelView
         if (panel != null) {
-            panel.visibility = View.VISIBLE
-            val savedX = ClickerPrefs.getPanelX(this)
-            val savedY = ClickerPrefs.getPanelY(this)
-            controlPanelParams.x = savedX
-            controlPanelParams.y = savedY
-            controlPanelParams.width = WindowManager.LayoutParams.WRAP_CONTENT
-            controlPanelParams.height = WindowManager.LayoutParams.WRAP_CONTENT
             try {
-                wm.updateViewLayout(panel, controlPanelParams)
+                windowManager.addView(panel, controlPanelParams)
             } catch (_: Exception) {}
         }
+    }
+
+    /**
+     * 微震動反饋：每一次成功發射點擊時發出極輕微震動，讓使用者確實得知正在開點
+     */
+    private fun triggerHapticFeedback() {
+        try {
+            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vm = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
+                vm?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+            }
+            if (vibrator != null && vibrator.hasVibrator()) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    vibrator.vibrate(VibrationEffect.createOneShot(28L, VibrationEffect.DEFAULT_AMPLITUDE))
+                } else {
+                    @Suppress("DEPRECATION")
+                    vibrator.vibrate(28L)
+                }
+            }
+        } catch (_: Exception) {}
     }
 
     private fun updateControlPanelUi() {
@@ -835,15 +844,25 @@ class AutoClickAccessibilityService : AccessibilityService(), Choreographer.Fram
      * 1. 嘗試使用無障礙語意節點點擊（ACTION_CLICK）直接觸發 View 的點擊事件（不受任何 Tapjacking 防護阻擋）
      * 2. 同步派發微位移手勢（moveTo + lineTo），產生完整 DOWN -> MOVE -> UP 觸控生命週期
      */
+        /**
+     * 純淨原生真手指點擊（Pure Tap Gesture）：
+     * 1. 觸發微震動反饋（點擊感知）
+     * 2. 嚴格原地單擊（moveTo 原地停留），完全符合 Android 標準 TouchDown -> TouchUp 週期，
+     *    徹底杜絕多餘滑動像素被蝦皮結帳自繪元件（Flutter / Canvas）誤判為手勢滾動！
+     * 3. 同步嘗試無障礙語意點擊，雙重保險！
+     */
     private fun performTapAt(screenX: Float, screenY: Float, durationMs: Long = 60L, onComplete: () -> Unit) {
-        // 先嘗試節點直點（穿透防護）
+        // 發射點擊微震動
+        triggerHapticFeedback()
+
+        // 嘗試語意節點點擊（輔助）
         tryPerformNodeClickAt(screenX, screenY)
 
+        // 原地真實手勢點擊（核心主幹）
         val path = Path().apply {
-            moveTo(screenX, screenY)
-            lineTo(screenX, screenY + 1f) // 微小移動 1px，避免某些 View 將單點視為無效觸控
+            moveTo(screenX, screenY) // 純粹原地落點，絕不加多餘滑動偏移
         }
-        val stroke = GestureDescription.StrokeDescription(path, 0L, durationMs)
+        val stroke = GestureDescription.StrokeDescription(path, 0L, durationMs.coerceIn(30L, 200L))
         val gesture = GestureDescription.Builder().addStroke(stroke).build()
         val ok = dispatchGesture(gesture, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {

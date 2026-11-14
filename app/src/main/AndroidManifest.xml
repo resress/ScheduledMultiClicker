@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- NTP 網路校準權限 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 點擊震動反饋權限 -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <!-- 前景服務權限（防止滑掉 App 時無障礙服務被系統強制終止） -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
